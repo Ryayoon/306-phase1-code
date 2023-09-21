@@ -69,4 +69,3 @@ performance_data = {
 
 performance_df = pd.DataFrame(performance_data)
 print(performance_df)
-model.save('mlp_model.h5')
