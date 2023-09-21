@@ -1,12 +1,10 @@
-from PIL import Image
 import os
 import numpy as np
 import pandas as pd
+import tensorflow as tf
+from tensorflow import keras
 from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.preprocessing import StandardScaler
-
+import keras_tuner as kt  # Import Keras Tuner
 # Load labels from labels.csv
 labels_df = pd.read_csv('./dataset/labels.csv')
 
@@ -19,8 +17,9 @@ for class_id, class_name in labels_df.values:
     class_dir = os.path.join(data_dir, str(class_id))
     for image_file in os.listdir(class_dir):
         image_path = os.path.join(class_dir, image_file)
-        image = Image.open(image_path)
-        image_data.append(np.array(image))
+        image = tf.keras.preprocessing.image.load_img(image_path, target_size=(32, 32))
+        image_array = tf.keras.preprocessing.image.img_to_array(image)
+        image_data.append(image_array)
         labels.append(class_id)
 
 # Convert lists to NumPy arrays
@@ -31,30 +30,41 @@ y = np.array(labels)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 # Normalize the pixel values
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train.reshape(X_train.shape[0], -1))
-X_test = scaler.transform(X_test.reshape(X_test.shape[0], -1))
+X_train = X_train / 255.0
+X_test = X_test / 255.0
 
-# Define the MLP model with hyperparameter tuning
-mlp = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
+def build_hypermodel(hp):
+    model = keras.Sequential()
+    model.add(keras.layers.Flatten(input_shape=(32, 32, 3)))
 
-# Train the model
-mlp.fit(X_train, y_train)
+    # Tune the number of units in the Dense layers
+    hp_units1 = hp.Int('units1', min_value=32, max_value=512, step=32)
+    model.add(keras.layers.Dense(units=hp_units1, activation='relu'))
 
-# Make predictions using the trained model
-y_pred = mlp.predict(X_test)
+    hp_units2 = hp.Int('units2', min_value=32, max_value=512, step=32)
+    model.add(keras.layers.Dense(units=hp_units2, activation='relu'))
 
-# Calculate performance metrics
-accuracy = accuracy_score(y_test, y_pred)
-precision = precision_score(y_test, y_pred, average='weighted')
-recall = recall_score(y_test, y_pred, average='weighted')
-f1 = f1_score(y_test, y_pred, average='weighted')
+    model.add(keras.layers.Dense(len(labels_df), activation='softmax'))
 
-# Create a table to present the comparative analysis
-performance_data = {
-    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score'],
-    'MLP Model': [accuracy, precision, recall, f1]
-}
+    # Tune the learning rate for the optimizer
+    hp_learning_rate = hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])
 
-performance_df = pd.DataFrame(performance_data)
-print(performance_df)
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=hp_learning_rate),
+                  loss='sparse_categorical_crossentropy',
+                  metrics=['accuracy'])
+
+    return model
+
+tuner = kt.Hyperband(build_hypermodel,
+                     objective='val_accuracy',
+                     max_epochs=10,
+                     factor=3,
+                     directory='my_dir',
+                     project_name='my_project')
+tuner.search(X_train, y_train, epochs=50, validation_split=0.2)
+best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
+model = build_hypermodel(best_hps)
+history = model.fit(X_train, y_train, epochs=50, validation_split=0.2)
+eval_result = model.evaluate(X_test, y_test)
+print("Test loss:", eval_result[0])
+print("Test accuracy:", eval_result[1])
