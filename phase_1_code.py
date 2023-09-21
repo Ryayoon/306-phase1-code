@@ -4,7 +4,8 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
 from sklearn.model_selection import train_test_split
-import keras_tuner as kt  # Import Keras Tuner
+from sklearn.metrics import precision_score, recall_score, f1_score
+
 # Load labels from labels.csv
 labels_df = pd.read_csv('./dataset/labels.csv')
 
@@ -33,38 +34,38 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 X_train = X_train / 255.0
 X_test = X_test / 255.0
 
-def build_hypermodel(hp):
-    model = keras.Sequential()
-    model.add(keras.layers.Flatten(input_shape=(32, 32, 3)))
+# Define the MLP model using tf.keras.Sequential
+model = keras.Sequential([
+    keras.layers.Flatten(input_shape=(32, 32, 3)),  # Flatten the input
+    keras.layers.Dense(100, activation='relu'),    # 1st hidden layer with 100 units and ReLU activation
+    keras.layers.Dense(50, activation='relu'),     # 2nd hidden layer with 50 units and ReLU activation
+    keras.layers.Dense(len(labels_df), activation='softmax')  # Output layer with softmax activation
+])
 
-    # Tune the number of units in the Dense layers
-    hp_units1 = hp.Int('units1', min_value=32, max_value=512, step=32)
-    model.add(keras.layers.Dense(units=hp_units1, activation='relu'))
+# Compile the model
+model.compile(optimizer='adam',
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'])
 
-    hp_units2 = hp.Int('units2', min_value=32, max_value=512, step=32)
-    model.add(keras.layers.Dense(units=hp_units2, activation='relu'))
+# Train the model
+model.fit(X_train, y_train, epochs=30, batch_size=32)
 
-    model.add(keras.layers.Dense(len(labels_df), activation='softmax'))
+# Evaluate the model on the test set
+_, accuracy = model.evaluate(X_test, y_test)
 
-    # Tune the learning rate for the optimizer
-    hp_learning_rate = hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])
+# Make predictions using the trained model
+y_pred = np.argmax(model.predict(X_test), axis=-1)
 
-    model.compile(optimizer=keras.optimizers.Adam(learning_rate=hp_learning_rate),
-                  loss='sparse_categorical_crossentropy',
-                  metrics=['accuracy'])
+# Calculate performance metrics
+precision = precision_score(y_test, y_pred, average='weighted')
+recall = recall_score(y_test, y_pred, average='weighted')
+f1 = f1_score(y_test, y_pred, average='weighted')
 
-    return model
+# Create a table to present the comparative analysis
+performance_data = {
+    'Metric': ['Accuracy', 'Precision', 'Recall', 'F1-Score'],
+    'MLP Model': [accuracy, precision, recall, f1]
+}
 
-tuner = kt.Hyperband(build_hypermodel,
-                     objective='val_accuracy',
-                     max_epochs=10,
-                     factor=3,
-                     directory='my_dir',
-                     project_name='my_project')
-tuner.search(X_train, y_train, epochs=50, validation_split=0.2)
-best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
-model = build_hypermodel(best_hps)
-history = model.fit(X_train, y_train, epochs=50, validation_split=0.2)
-eval_result = model.evaluate(X_test, y_test)
-print("Test loss:", eval_result[0])
-print("Test accuracy:", eval_result[1])
+performance_df = pd.DataFrame(performance_data)
+print(performance_df)
